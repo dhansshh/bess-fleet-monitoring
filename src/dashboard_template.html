@@ -1,0 +1,489 @@
+<title>BESS Fleet Monitor</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: control-room console. Summary strip, then contract (availability + LDs), then operations (faults, dispatch, data quality), then method. */
+:root {
+  --bg: #f4f6f7;
+  --panel: #fcfcfb;
+  --ink: #0f1417;
+  --ink-2: #4a5359;
+  --muted: #858d92;
+  --grid: #e1e4e3;
+  --axis: #c0c6c7;
+  --line: rgba(15, 20, 23, 0.10);
+  --accent: #0e6b74;
+  --accent-wash: rgba(14, 107, 116, 0.09);
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a;
+  --good: #0ca30c; --warn: #fab219; --crit: #d03b3b;
+  --good-ink: #006300; --crit-ink: #b42b2b;
+  --f-display: "IBM Plex Sans Condensed", "Arial Narrow", system-ui, sans-serif;
+  --f-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e1214; --panel: #171c1e; --ink: #eef1f0; --ink-2: #bfc6c6; --muted: #868e90;
+    --grid: #262c2e; --axis: #394143; --line: rgba(255, 255, 255, 0.10);
+    --accent: #4fb6be; --accent-wash: rgba(79, 182, 190, 0.12);
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70;
+    --good-ink: #2fbf2f; --crit-ink: #ec6a6a;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0e1214; --panel: #171c1e; --ink: #eef1f0; --ink-2: #bfc6c6; --muted: #868e90;
+  --grid: #262c2e; --axis: #394143; --line: rgba(255, 255, 255, 0.10);
+  --accent: #4fb6be; --accent-wash: rgba(79, 182, 190, 0.12);
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70;
+  --good-ink: #2fbf2f; --crit-ink: #ec6a6a;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font: 14px/1.5 var(--f-body); }
+.wrap { max-width: 1180px; margin: 0 auto; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 28px 56px; display: grid; gap: 28px; }
+h1, h2, h3 { font-family: var(--f-display); font-weight: 600; text-wrap: balance; margin: 0; letter-spacing: 0.005em; }
+h1 { font-size: 30px; line-height: 1.15; }
+h2 { font-size: 21px; }
+h3 { font-size: 15px; font-family: var(--f-body); font-weight: 600; }
+p { margin: 0; }
+.eyebrow { font: 500 11px/1.4 var(--f-mono); text-transform: uppercase; letter-spacing: 0.09em; color: var(--accent); }
+.lede { color: var(--ink-2); max-width: 68ch; }
+.muted { color: var(--muted); }
+.num { font-variant-numeric: tabular-nums; }
+header.top { display: grid; gap: 10px; }
+.meta { display: flex; flex-wrap: wrap; gap: 8px 18px; font: 12px var(--f-mono); color: var(--muted); }
+.sample { display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px; border: 1px solid var(--line); border-radius: 4px; color: var(--ink-2); }
+
+/* KPI strip */
+.kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; }
+.kpi { padding: 16px 18px; display: grid; gap: 4px; align-content: start; min-width: 0; }
+.kpi + .kpi { border-left: 1px solid var(--line); }
+.kpi .label { font: 500 11px var(--f-mono); text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+.kpi .value { font: 600 28px/1.1 var(--f-display); }
+.kpi .value small { font: 500 14px var(--f-body); color: var(--ink-2); margin-left: 3px; }
+.kpi .sub { font-size: 12.5px; color: var(--ink-2); }
+@media (max-width: 760px) { .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } .kpi:nth-child(3) { border-left: 0; } .kpi:nth-child(n+3) { border-top: 1px solid var(--line); } }
+
+section { display: grid; gap: 14px; }
+.sec-head { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 10px 20px; }
+.sec-head > div:not(.legend):not(.controls) { display: grid; gap: 4px; min-width: 0; }
+.panel.stack { gap: 8px; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 16px 18px; min-width: 0; }
+.grid-2 { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); gap: 16px; }
+@media (max-width: 900px) { .grid-2 { grid-template-columns: minmax(0, 1fr); } }
+
+/* small multiples */
+.multiples { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+@media (max-width: 900px) { .multiples { grid-template-columns: minmax(0, 1fr); } }
+.mult { display: grid; gap: 6px; min-width: 0; }
+.mult-head { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12.5px; color: var(--ink-2); }
+.legend i { display: inline-block; width: 14px; height: 0; border-top: 2px solid; margin-right: 6px; vertical-align: 3px; }
+.legend i.dash { border-top-style: dashed; }
+.legend b.sq { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+
+svg { display: block; width: 100%; height: auto; overflow: visible; }
+svg text { fill: var(--muted); font: 11px var(--f-mono); }
+svg .gridl { stroke: var(--grid); stroke-width: 1; }
+svg .axisl { stroke: var(--axis); stroke-width: 1; }
+svg .lbl-ink { fill: var(--ink-2); }
+svg .lbl-crit { fill: var(--crit-ink); font-weight: 500; }
+svg .hit { fill: transparent; cursor: crosshair; }
+
+/* tables */
+.tbl-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th { font: 500 11px var(--f-mono); text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+td.r, th.r { text-align: right; font-variant-numeric: tabular-nums; }
+tr.total td { font-weight: 600; border-bottom: 0; }
+.pill { display: inline-flex; align-items: center; gap: 5px; padding: 1px 8px; border-radius: 99px; font: 500 11.5px var(--f-body); }
+.pill.crit { background: color-mix(in srgb, var(--crit) 14%, transparent); color: var(--crit-ink); }
+.pill.good { background: color-mix(in srgb, var(--good) 14%, transparent); color: var(--good-ink); }
+.pill.neutral { background: var(--accent-wash); color: var(--accent); }
+
+/* controls */
+.controls { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; background: var(--panel); }
+.seg button { font: 500 13px var(--f-body); color: var(--ink-2); background: transparent; border: 0; padding: 6px 12px; cursor: pointer; }
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button[aria-pressed="true"] { background: var(--accent-wash); color: var(--accent); }
+.seg button:focus-visible, input:focus-visible, select:focus-visible, .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+input[type="date"], select { font: 13px var(--f-body); color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; }
+.btn { font: 500 13px var(--f-body); color: var(--accent); background: transparent; border: 1px solid var(--line); border-radius: 6px; padding: 5px 10px; cursor: pointer; }
+.btn:hover { background: var(--accent-wash); }
+.stack { display: grid; gap: 4px; align-content: start; }
+.chart-label { font: 500 11px var(--f-mono); text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+.note { font-size: 12.5px; color: var(--ink-2); }
+
+.tip { position: fixed; z-index: 20; pointer-events: none; background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; font-size: 12.5px; box-shadow: 0 6px 20px rgba(0,0,0,.14); min-width: 140px; }
+.tip .t { font: 500 11px var(--f-mono); color: var(--muted); margin-bottom: 4px; }
+.tip .row { display: flex; justify-content: space-between; gap: 14px; font-variant-numeric: tabular-nums; }
+
+/* method */
+.method { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
+@media (max-width: 900px) { .method { grid-template-columns: minmax(0, 1fr); } }
+.formula { font: 13px/1.7 var(--f-mono); background: var(--accent-wash); border-radius: 6px; padding: 10px 12px; color: var(--ink); overflow-x: auto; }
+.method ul { margin: 0; padding-left: 18px; display: grid; gap: 6px; color: var(--ink-2); }
+.pipeline { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; counter-reset: st; }
+.pipeline div { border: 1px solid var(--line); border-radius: 6px; padding: 10px; font-size: 12.5px; color: var(--ink-2); min-width: 0; }
+.pipeline div b { display: block; font: 600 13px var(--f-body); color: var(--ink); margin-bottom: 2px; }
+.pipeline div b::before { counter-increment: st; content: counter(st) "  "; font: 500 11px var(--f-mono); color: var(--accent); }
+@media (max-width: 760px) { .pipeline { grid-template-columns: minmax(0, 1fr); } }
+footer { font-size: 12.5px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 14px; }
+@media (prefers-reduced-motion: no-preference) { .seg button, .btn { transition: background .15s; } }
+</style>
+
+<div class="wrap">
+  <header class="top">
+    <span class="eyebrow">Energy Storage Service · Portfolio project</span>
+    <h1>BESS Fleet Monitor 2025</h1>
+    <p class="lede">Availability, LTSA compliance and dispatch performance for a three-site, 75 MW / 150 MWh battery storage fleet. Built from 15-minute SCADA telemetry and an O&amp;M ticket export through a Python and SQL pipeline.</p>
+    <div class="meta"><span class="sample">Simulated data for demonstration</span><span id="meta-gen"></span><span>Interval 15 min · Europe/Berlin</span></div>
+  </header>
+
+  <div class="kpis" id="kpis"></div>
+
+  <section id="contract">
+    <div class="sec-head">
+      <div>
+        <span class="eyebrow">Contract</span>
+        <h2>Monthly contractual availability vs LTSA guarantee</h2>
+        <p class="note">Months below the guarantee trigger liquidated damages. Excused events (TSO curtailment, planned maintenance within allowance) are removed from the denominator.</p>
+      </div>
+      <div class="legend"><span><b class="sq" style="background:var(--axis)"></b>Meets guarantee</span><span><b class="sq" style="background:var(--crit)"></b>Below guarantee (LD due)</span><span><i class="dash" style="border-color:var(--ink-2)"></i>Guarantee</span></div>
+    </div>
+    <div class="panel"><div class="multiples" id="avail-mult"></div></div>
+    <div class="grid-2">
+      <div class="panel stack">
+        <h3>Liquidated damages ledger</h3>
+        <p class="note">LD = shortfall (%-pts) × rated MW × €450 per MW per %-pt, per month.</p>
+        <div class="tbl-wrap"><table id="ld-table"></table></div>
+      </div>
+      <div class="panel stack">
+        <h3>Downtime split by cause, 2025</h3>
+        <p class="note">Block-hours per site. Only counted downtime reduces contractual availability.</p>
+        <div class="tbl-wrap"><table id="split-table"></table></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="ops">
+    <div class="sec-head">
+      <div>
+        <span class="eyebrow">Operations</span>
+        <h2>Faults, dispatch and data quality</h2>
+      </div>
+      <div class="controls">
+        <div class="seg" role="group" aria-label="Site" id="site-seg"></div>
+      </div>
+    </div>
+    <div class="grid-2">
+      <div class="panel stack">
+        <h3>Fault Pareto: downtime block-hours by category</h3>
+        <p class="note">Physical downtime only. EMS communication losses appear under data quality.</p>
+        <div id="pareto"></div>
+      </div>
+      <div class="panel stack">
+        <h3>Monthly performance</h3>
+        <div class="tbl-wrap"><table id="perf-table"></table></div>
+      </div>
+    </div>
+    <div class="panel stack">
+      <div class="sec-head">
+        <div><h3>Daily dispatch profile</h3><p class="note">Hourly means from cleaned SCADA. Three panels share one time axis instead of a dual axis.</p></div>
+        <div class="controls">
+          <label class="muted" for="day">Day</label>
+          <input type="date" id="day" min="2025-01-01" max="2025-12-31" value="2025-07-15">
+          <button class="btn" id="prev" type="button">Previous day</button>
+          <button class="btn" id="next" type="button">Next day</button>
+        </div>
+      </div>
+      <div class="legend"><span><i style="border-color:var(--s1)"></i>Actual power</span><span><i class="dash" style="border-color:var(--ink-2)"></i>EMS setpoint</span><span><i style="border-color:var(--accent)"></i>Available capacity</span></div>
+      <div class="stack"><span class="chart-label">Power, MW (+ discharge / − charge)</span><div id="d-power"></div></div>
+      <div class="stack"><span class="chart-label">State of charge, %</span><div id="d-soc"></div></div>
+      <div class="stack"><span class="chart-label">Day-ahead price, €/MWh</span><div id="d-price"></div></div>
+    </div>
+    <div class="panel stack">
+      <h3>SCADA data quality and gap reconciliation</h3>
+      <p class="note">Gaps up to 1 h are forward-filled. Longer gaps are matched against EMS communication-loss tickets; unmatched gaps are flagged for follow-up with the site.</p>
+      <div class="tbl-wrap"><table id="dq-table"></table></div>
+    </div>
+  </section>
+
+  <section id="method">
+    <div><span class="eyebrow">Method</span><h2>How the numbers are built</h2></div>
+    <div class="pipeline">
+      <div><b>Ingest</b>SCADA CSV, ticket export and site master data loaded to SQLite.</div>
+      <div><b>Validate</b>Duplicates, sampling interval, power above rating, SoC range.</div>
+      <div><b>Clean</b>Gap detection, forward-fill, ticket reconciliation, flags.</div>
+      <div><b>Calculate</b>Interval-level block states, availability, LDs, SQL KPI views.</div>
+      <div><b>Publish</b>JSON bundle and CSV exports feed this dashboard.</div>
+    </div>
+    <div class="method">
+      <div class="panel stack">
+        <h3>Contractual availability</h3>
+        <div class="formula">A = (T − D<sub>counted</sub> − D<sub>excused</sub>) / (T − D<sub>excused</sub>)</div>
+        <p class="note">T = period block-hours. Each block and 15-min interval gets one state, so overlapping tickets are never double-counted. Priority: grid curtailment, then unplanned fault, then planned maintenance.</p>
+      </div>
+      <div class="panel stack">
+        <h3>Contract rules applied</h3>
+        <ul>
+          <li>TSO curtailment is excused in full.</li>
+          <li>Planned maintenance is excused up to 72 h per block per year; hours beyond the allowance count.</li>
+          <li>Guarantee 97.0 % (DE sites) and 97.5 % (NL site), measured monthly.</li>
+          <li>LD rate €450 per MW per %-point of monthly shortfall.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <footer>All telemetry, tickets, prices and contract terms are simulated for this portfolio project and do not describe any real asset. Code: Python (pandas, NumPy), SQLite, SQL views, vanilla SVG.</footer>
+</div>
+<div class="tip" id="tip" hidden></div>
+
+<script>
+const D = /*__DATA__*/null;
+const SITES = D.sites.map(s => s.site_id);
+const SVAR = { [SITES[0]]: "--s1", [SITES[1]]: "--s2", [SITES[2]]: "--s3" };
+const siteName = Object.fromEntries(D.sites.map(s => [s.site_id, s.site_name]));
+const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const NS = "http://www.w3.org/2000/svg";
+const fmt = (v, d = 0) => v.toLocaleString("en-GB", { minimumFractionDigits: d, maximumFractionDigits: d });
+const eur = v => "€" + fmt(Math.round(v));
+const el = (tag, attrs = {}, parent) => { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (parent) parent.appendChild(e); return e; };
+const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+let state = { site: SITES[0] };
+try { const s = localStorage.getItem("bess-site"); if (s && SITES.includes(s)) state.site = s; } catch (e) {}
+
+document.getElementById("meta-gen").textContent = "Pipeline run " + D.generated.slice(0, 10);
+
+/* ---------- tooltip ---------- */
+const tip = document.getElementById("tip");
+function showTip(evt, title, rows) {
+  tip.innerHTML = `<div class="t">${title}</div>` + rows.map(([k, v, c]) => `<div class="row"><span>${c ? `<span class="swatch" style="background:${c}"></span>` : ""}${k}</span><b>${v}</b></div>`).join("");
+  tip.hidden = false;
+  const w = tip.offsetWidth, h = tip.offsetHeight;
+  let x = evt.clientX + 14, y = evt.clientY + 14;
+  if (x + w > innerWidth - 8) x = evt.clientX - w - 14;
+  if (y + h > innerHeight - 8) y = evt.clientY - h - 14;
+  tip.style.left = x + "px"; tip.style.top = y + "px";
+}
+const hideTip = () => { tip.hidden = true; };
+
+/* ---------- KPIs ---------- */
+function kpis() {
+  const av = D.availability;
+  const sum = k => av.reduce((a, r) => a + r[k], 0);
+  const T = sum("period_bh"), C = sum("counted_bh"), X = sum("excused_bh");
+  const fleetA = 100 * (T - C - X) / (T - X);
+  const ld = sum("ld_eur");
+  const below = av.filter(r => r.shortfall_pct > 0).length;
+  const rev = D.performance.reduce((a, r) => a + r.arbitrage_revenue_keur, 0);
+  const mw = D.sites.reduce((a, s) => a + s.rated_mw, 0);
+  const dq = D.data_quality;
+  const cards = [
+    ["Fleet availability", fmt(fleetA, 2), "%", `MW-weighted, 2025 · ${mw} MW rated`],
+    ["LD exposure", eur(ld), "", `${below} of 36 site-months below guarantee`],
+    ["Arbitrage margin", "€" + fmt(rev / 1000, 2), "M", `€${fmt(rev / mw, 1)}k per MW · day-ahead`],
+    ["SCADA completeness", fmt(dq.completeness_pct, 2), "%", `${dq.gaps_total} gaps · ${dq.gaps_by_method.interpolated_unexplained || 0} unexplained`],
+  ];
+  document.getElementById("kpis").innerHTML = cards.map(([l, v, u, s]) =>
+    `<div class="kpi"><span class="label">${l}</span><span class="value num">${v}<small>${u}</small></span><span class="sub">${s}</span></div>`).join("");
+}
+
+/* ---------- availability small multiples ---------- */
+function availMultiples() {
+  const host = document.getElementById("avail-mult");
+  host.innerHTML = "";
+  const yMin = 88, yMax = 100;
+  for (const s of D.sites) {
+    const rows = D.availability.filter(r => r.site_id === s.site_id);
+    const ld = rows.reduce((a, r) => a + r.ld_eur, 0);
+    const box = document.createElement("div");
+    box.className = "mult";
+    box.innerHTML = `<div class="mult-head"><h3><span class="swatch" style="background:var(${SVAR[s.site_id]})"></span>${s.site_name}</h3><span class="muted num" style="font-size:12px">${s.rated_mw} MW · ${s.guaranteed_availability_pct.toFixed(1)} % · LD ${eur(ld)}</span></div>`;
+    host.appendChild(box);
+    const W = 360, H = 190, m = { l: 34, r: 6, t: 14, b: 22 };
+    const iw = W - m.l - m.r, ih = H - m.t - m.b;
+    const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": `Monthly availability for ${s.site_name}` }, box);
+    const y = v => m.t + ih * (1 - (Math.max(yMin, Math.min(yMax, v)) - yMin) / (yMax - yMin));
+    for (const t of [88, 92, 96, 100]) {
+      el("line", { x1: m.l, x2: W - m.r, y1: y(t), y2: y(t), class: "gridl" }, svg);
+      const tx = el("text", { x: m.l - 6, y: y(t) + 3.5, "text-anchor": "end" }, svg); tx.textContent = t;
+    }
+    const bw = iw / 12, gap = Math.max(3, bw * 0.28);
+    rows.forEach((r, i) => {
+      const x = m.l + i * bw + gap / 2, w = bw - gap;
+      const below = r.shortfall_pct > 0;
+      const top = y(r.availability_pct), base = y(yMin);
+      const h = Math.max(1, base - top);
+      const rr = Math.min(3, w / 2, h);
+      el("path", { d: `M${x},${base} V${top + rr} Q${x},${top} ${x + rr},${top} H${x + w - rr} Q${x + w},${top} ${x + w},${top + rr} V${base} Z`, fill: below ? css("--crit") : css("--axis") }, svg);
+      if (i % 2 === 0 || bw > 26) { const t = el("text", { x: x + w / 2, y: H - 6, "text-anchor": "middle" }, svg); t.textContent = MONTHS[i][0] + (bw > 26 ? MONTHS[i].slice(1) : ""); }
+      const hit = el("rect", { x: m.l + i * bw, y: m.t, width: bw, height: ih, class: "hit" }, svg);
+      hit.addEventListener("mousemove", e => showTip(e, `${s.site_name} · ${MONTHS[i]} 2025`, [
+        ["Availability", fmt(r.availability_pct, 2) + " %"], ["Guarantee", fmt(r.guaranteed_pct, 1) + " %"],
+        ["Counted downtime", fmt(r.counted_bh, 0) + " bh"], ["Excused downtime", fmt(r.excused_bh, 0) + " bh"],
+        ["LD", r.ld_eur ? eur(r.ld_eur) : "none"]]));
+      hit.addEventListener("mouseleave", hideTip);
+    });
+    const g = s.guaranteed_availability_pct;
+    el("line", { x1: m.l, x2: W - m.r, y1: y(g), y2: y(g), stroke: css("--ink-2"), "stroke-width": 1.5, "stroke-dasharray": "5 4" }, svg);
+    el("line", { x1: m.l, x2: W - m.r, y1: y(yMin), y2: y(yMin), class: "axisl" }, svg);
+  }
+}
+
+/* ---------- tables ---------- */
+function ldTable() {
+  const rows = D.availability.filter(r => r.shortfall_pct > 0).sort((a, b) => b.ld_eur - a.ld_eur);
+  const total = rows.reduce((a, r) => a + r.ld_eur, 0);
+  document.getElementById("ld-table").innerHTML =
+    `<thead><tr><th>Site</th><th>Month</th><th class="r">Availability</th><th class="r">Shortfall</th><th class="r">LD</th></tr></thead><tbody>` +
+    rows.map(r => `<tr><td><span class="swatch" style="background:var(${SVAR[r.site_id]})"></span>${r.site_id}</td><td>${MONTHS[+r.month.slice(5) - 1]} 2025</td><td class="r">${fmt(r.availability_pct, 2)} %</td><td class="r">${fmt(r.shortfall_pct, 2)} pt</td><td class="r">${eur(r.ld_eur)}</td></tr>`).join("") +
+    `<tr class="total"><td colspan="4">Total 2025</td><td class="r">${eur(total)}</td></tr></tbody>`;
+}
+function splitTable() {
+  const by = {};
+  for (const r of D.availability) {
+    const b = by[r.site_id] ??= { unplanned: 0, planned: 0, excess: 0, grid: 0 };
+    b.unplanned += r.unplanned_bh; b.planned += r.planned_bh; b.excess += r.planned_excess_bh; b.grid += r.grid_bh;
+  }
+  document.getElementById("split-table").innerHTML =
+    `<thead><tr><th>Site</th><th class="r">Unplanned</th><th class="r">Planned</th><th class="r">Over allowance</th><th class="r">TSO</th></tr></thead><tbody>` +
+    SITES.map(s => { const b = by[s]; return `<tr><td><span class="swatch" style="background:var(${SVAR[s]})"></span>${s}</td><td class="r">${fmt(b.unplanned)}</td><td class="r">${fmt(b.planned)}</td><td class="r">${b.excess ? `<span class="pill crit">${fmt(b.excess)}</span>` : "0"}</td><td class="r">${fmt(b.grid)}</td></tr>`; }).join("") +
+    `</tbody>`;
+}
+
+/* ---------- site selector ---------- */
+function siteSeg() {
+  const seg = document.getElementById("site-seg");
+  seg.innerHTML = SITES.map(s => `<button type="button" id="seg-${s}" aria-pressed="${s === state.site}"><span class="swatch" style="background:var(${SVAR[s]})"></span>${s}</button>`).join("");
+  seg.querySelectorAll("button").forEach(b => b.addEventListener("click", () => {
+    state.site = b.id.slice(4);
+    try { localStorage.setItem("bess-site", state.site); } catch (e) {}
+    seg.querySelectorAll("button").forEach(x => x.setAttribute("aria-pressed", x === b));
+    renderSite();
+  }));
+}
+
+/* ---------- pareto ---------- */
+function pareto() {
+  const rows = D.pareto.filter(r => r.site_id === state.site).sort((a, b) => b.block_hours - a.block_hours);
+  const host = document.getElementById("pareto"); host.innerHTML = "";
+  const W = 560, rowH = 30, m = { l: 190, r: 70, t: 4, b: 4 };
+  const H = m.t + m.b + rows.length * rowH;
+  const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Downtime by fault category" }, host);
+  const max = Math.max(...rows.map(r => r.block_hours));
+  const x = v => (W - m.l - m.r) * v / max;
+  const col = css(SVAR[state.site]);
+  rows.forEach((r, i) => {
+    const yy = m.t + i * rowH, bh = 14, by = yy + (rowH - bh) / 2;
+    const t = el("text", { x: m.l - 10, y: by + bh / 2 + 4, "text-anchor": "end", class: "lbl-ink" }, svg); t.textContent = r.category;
+    const w = Math.max(2, x(r.block_hours)), rr = Math.min(3, w / 2);
+    el("path", { d: `M${m.l},${by} H${m.l + w - rr} Q${m.l + w},${by} ${m.l + w},${by + rr} V${by + bh - rr} Q${m.l + w},${by + bh} ${m.l + w - rr},${by + bh} H${m.l} Z`, fill: r.event_class === "unplanned" ? col : css("--axis") }, svg);
+    const v = el("text", { x: m.l + w + 6, y: by + bh / 2 + 4, class: "lbl-ink" }, svg); v.textContent = fmt(r.block_hours) + " bh";
+    const hit = el("rect", { x: 0, y: yy, width: W, height: rowH, class: "hit" }, svg);
+    hit.addEventListener("mousemove", e => showTip(e, r.category, [["Class", r.event_class], ["Tickets", fmt(r.tickets)], ["Block-hours", fmt(r.block_hours, 1)], ["MTTR", fmt(r.mttr_h, 1) + " h"]]));
+    hit.addEventListener("mouseleave", hideTip);
+  });
+  const lg = document.createElement("div"); lg.className = "legend";
+  lg.innerHTML = `<span><b class="sq" style="background:${col}"></b>Unplanned (counted)</span><span><b class="sq" style="background:var(--axis)"></b>Planned / TSO (excused)</span>`;
+  host.appendChild(lg);
+}
+
+function perfTable() {
+  const rows = D.performance.filter(r => r.site_id === state.site);
+  const tot = k => rows.reduce((a, r) => a + r[k], 0);
+  document.getElementById("perf-table").innerHTML =
+    `<thead><tr><th>Month</th><th class="r">Out MWh</th><th class="r">RTE</th><th class="r">Cycles</th><th class="r">Margin k€</th><th class="r">Tracking</th></tr></thead><tbody>` +
+    rows.map(r => `<tr><td>${MONTHS[+r.month.slice(5) - 1]}</td><td class="r">${fmt(r.discharged_mwh)}</td><td class="r">${fmt(r.round_trip_eff_pct, 1)} %</td><td class="r">${fmt(r.equiv_full_cycles, 1)}</td><td class="r">${fmt(r.arbitrage_revenue_keur, 1)}</td><td class="r">${r.tracking_violation_pct > 2 ? `<span class="pill crit">${fmt(r.tracking_violation_pct, 2)} %</span>` : fmt(r.tracking_violation_pct, 2) + " %"}</td></tr>`).join("") +
+    `<tr class="total"><td>2025</td><td class="r">${fmt(tot("discharged_mwh"))}</td><td class="r">${fmt(100 * tot("discharged_mwh") / tot("charged_mwh"), 1)} %</td><td class="r">${fmt(tot("equiv_full_cycles"), 0)}</td><td class="r">${fmt(tot("arbitrage_revenue_keur"), 0)}</td><td></td></tr></tbody>`;
+}
+
+/* ---------- daily dispatch ---------- */
+function lineChart(host, ts, series, opts) {
+  host.innerHTML = "";
+  const W = 1100, H = opts.h || 150, m = { l: 46, r: 10, t: 8, b: opts.xAxis ? 22 : 6 };
+  const iw = W - m.l - m.r, ih = H - m.t - m.b;
+  const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": opts.label }, host);
+  const vals = series.flatMap(s => s.v).filter(v => v != null);
+  let lo = opts.min ?? Math.min(...vals), hi = opts.max ?? Math.max(...vals);
+  if (opts.zero) { lo = Math.min(lo, 0); hi = Math.max(hi, 0); }
+  const step = niceStep((hi - lo) / 4);
+  lo = Math.floor(lo / step) * step; hi = Math.ceil(hi / step) * step; if (hi === lo) hi = lo + step;
+  const n = ts.length;
+  const x = i => m.l + iw * i / (n - 1);
+  const y = v => m.t + ih * (1 - (v - lo) / (hi - lo));
+  for (let t = lo; t <= hi + 1e-9; t += step) {
+    el("line", { x1: m.l, x2: W - m.r, y1: y(t), y2: y(t), class: t === 0 && opts.zero ? "axisl" : "gridl" }, svg);
+    const tx = el("text", { x: m.l - 8, y: y(t) + 3.5, "text-anchor": "end" }, svg); tx.textContent = fmt(t);
+  }
+  if (opts.xAxis) for (let i = 0; i < n; i += 3) { const t = el("text", { x: x(i), y: H - 5, "text-anchor": "middle" }, svg); t.textContent = ts[i].slice(11) + ":00"; }
+  for (const s of series) {
+    let d = "", pen = false;
+    s.v.forEach((v, i) => { if (v == null) { pen = false; return; } d += (pen ? "L" : "M") + x(i).toFixed(1) + "," + y(v).toFixed(1); pen = true; });
+    const p = el("path", { d, fill: "none", stroke: s.color, "stroke-width": 2, "stroke-linejoin": "round" }, svg);
+    if (s.dash) p.setAttribute("stroke-dasharray", "5 4");
+  }
+  const cross = el("line", { y1: m.t, y2: m.t + ih, stroke: css("--axis"), "stroke-width": 1, visibility: "hidden" }, svg);
+  const hit = el("rect", { x: m.l, y: m.t, width: iw, height: ih, class: "hit" }, svg);
+  hit.addEventListener("mousemove", e => {
+    const r = svg.getBoundingClientRect();
+    const px = (e.clientX - r.left) * W / r.width;
+    const i = Math.max(0, Math.min(n - 1, Math.round((px - m.l) / iw * (n - 1))));
+    cross.setAttribute("x1", x(i)); cross.setAttribute("x2", x(i)); cross.setAttribute("visibility", "visible");
+    showTip(e, ts[i].replace("T", " ") + ":00", series.map(s => [s.name, s.v[i] == null ? "–" : fmt(s.v[i], 1) + " " + opts.unit, s.color]));
+  });
+  hit.addEventListener("mouseleave", () => { cross.setAttribute("visibility", "hidden"); hideTip(); });
+}
+function niceStep(raw) { const p = Math.pow(10, Math.floor(Math.log10(raw || 1))); const f = raw / p; return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10) * p; }
+
+function dispatch() {
+  const H = D.hourly[state.site];
+  const day = document.getElementById("day").value || "2025-07-15";
+  const i0 = H.ts.indexOf(day + "T00");
+  if (i0 < 0) return;
+  const sl = a => a.slice(i0, i0 + 24);
+  const ts = sl(H.ts);
+  const rated = D.sites.find(s => s.site_id === state.site).rated_mw;
+  const c = css(SVAR[state.site]);
+  lineChart(document.getElementById("d-power"), ts, [
+    { name: "Actual", v: sl(H.act), color: c },
+    { name: "Setpoint", v: sl(H.sp), color: css("--ink-2"), dash: true },
+    { name: "Available", v: sl(H.avail), color: css("--accent") },
+  ], { h: 170, zero: true, min: -rated, max: rated, unit: "MW", label: "Power" });
+  lineChart(document.getElementById("d-soc"), ts, [{ name: "SoC", v: sl(H.soc), color: c }], { h: 110, min: 0, max: 100, unit: "%", label: "State of charge" });
+  lineChart(document.getElementById("d-price"), ts, [{ name: "Price", v: sl(H.price), color: css("--ink-2") }], { h: 120, xAxis: true, unit: "€/MWh", label: "Price" });
+}
+function shiftDay(d) {
+  const inp = document.getElementById("day");
+  const t = new Date(inp.value + "T12:00:00Z"); t.setUTCDate(t.getUTCDate() + d);
+  const v = t.toISOString().slice(0, 10);
+  if (v >= inp.min && v <= inp.max) { inp.value = v; dispatch(); }
+}
+document.getElementById("day").addEventListener("change", dispatch);
+document.getElementById("prev").addEventListener("click", () => shiftDay(-1));
+document.getElementById("next").addEventListener("click", () => shiftDay(1));
+
+function dqTable() {
+  const meth = { forward_fill: "Forward-filled (≤ 1 h)", reconciled_ticket: "Matched to EMS ticket", interpolated_unexplained: "Unexplained (flagged)" };
+  const perf = Object.fromEntries(SITES.map(s => [s, D.performance.filter(r => r.site_id === s)]));
+  document.getElementById("dq-table").innerHTML =
+    `<thead><tr><th>Site</th><th class="r">Completeness</th>${Object.values(meth).map(m => `<th class="r">${m}</th>`).join("")}</tr></thead><tbody>` +
+    SITES.map(s => {
+      const comp = perf[s].reduce((a, r) => a + r.data_completeness_pct, 0) / perf[s].length;
+      const cell = k => { const g = D.gaps.find(r => r.site_id === s && r.method === k); if (!g) return "0"; const txt = `${g.gaps} gaps · ${fmt(g.hours, 1)} h`; return k === "interpolated_unexplained" ? `<span class="pill crit">${txt}</span>` : k === "reconciled_ticket" ? `<span class="pill neutral">${txt}</span>` : txt; };
+      return `<tr${s === state.site ? ' style="background:var(--accent-wash)"' : ""}><td><span class="swatch" style="background:var(${SVAR[s]})"></span>${siteName[s]}</td><td class="r">${fmt(comp, 2)} %</td>${Object.keys(meth).map(k => `<td class="r">${cell(k)}</td>`).join("")}</tr>`;
+    }).join("") + `</tbody>`;
+}
+
+function renderSite() { pareto(); perfTable(); dispatch(); dqTable(); }
+function renderAll() { kpis(); availMultiples(); ldTable(); splitTable(); siteSeg(); renderSite(); }
+renderAll();
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", renderAll);
+new MutationObserver(renderAll).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+</script>
